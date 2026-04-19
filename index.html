@@ -75,7 +75,7 @@
 </head>
 <body>
 
-<div id="game-container">
+<div id="game-container" onclick="handleFirstInteraction()">
     <!-- YouTube BGM プレイヤー (API経由で制御) -->
     <div id="bgm-container">
         <div id="player"></div>
@@ -92,8 +92,8 @@
 
     <div id="overlay">
         <h1 id="statusTitle" class="text-5xl font-bold mb-4 text-yellow-400">森の大冒険</h1>
-        <p id="statusDesc" class="text-xl px-10 text-center max-w-md">マウスやタッチで猫を動かして、障害物を避けよう！<br><br>※開始すると音楽が流れます</p>
-        <button class="btn" onclick="startGame()">冒険を始める</button>
+        <p id="statusDesc" class="text-xl px-10 text-center max-w-md">マウスやタッチで猫を動かして、障害物を避けよう！<br><br><span class="text-sm opacity-70">画面をクリックすると音楽が流れます</span></p>
+        <button class="btn" onclick="startGame(event)">冒険を始める</button>
     </div>
 </div>
 
@@ -103,22 +103,42 @@
 <script>
     // --- BGM 制御 ---
     let youtubePlayer;
+    let hasInteracted = false;
+
     function onYouTubeIframeAPIReady() {
         youtubePlayer = new YT.Player('player', {
             height: '1',
             width: '1',
             videoId: 'PM5V3P_iDAk',
             playerVars: {
-                'autoplay': 0,
+                'autoplay': 1, // 尽可能自动播放
                 'loop': 1,
-                'playlist': 'PM5V3P_iDAk' // ループに必要
+                'playlist': 'PM5V3P_iDAk',
+                'controls': 0,
+                'mute': 0
             },
             events: {
                 'onReady': (event) => {
                     event.target.setVolume(50);
+                    // 如果浏览器允许，直接播放
+                    event.target.playVideo();
+                },
+                'onStateChange': (event) => {
+                    // 确保循环播放
+                    if (event.data === YT.PlayerState.ENDED) {
+                        youtubePlayer.playVideo();
+                    }
                 }
             }
         });
+    }
+
+    // 处理用户首次点击页面，触发音频播放（绕过浏览器自动播放限制）
+    function handleFirstInteraction() {
+        if (!hasInteracted && youtubePlayer && youtubePlayer.playVideo) {
+            youtubePlayer.playVideo();
+            hasInteracted = true;
+        }
     }
 
     const canvas = document.getElementById('gameCanvas');
@@ -254,12 +274,12 @@
         state.lastBigStoneTime = Date.now();
     }
 
-    function startGame() {
+    function startGame(e) {
+        if (e) e.stopPropagation(); // 防止重复触发 handleFirstInteraction
+        handleFirstInteraction();
         overlay.style.display = 'none';
         initGame();
         state.running = true;
-        // BGM 再生
-        if (youtubePlayer && youtubePlayer.playVideo) youtubePlayer.playVideo();
         requestAnimationFrame(gameLoop);
     }
 
@@ -268,8 +288,7 @@
         overlay.style.display = 'flex';
         statusTitle.innerText = 'ゲーム終了！';
         statusDesc.innerText = `走行距離: ${Math.floor(state.distance)}m\nスコア: ${state.score}\nもう一度挑戦しよう！`;
-        // BGM 停止
-        if (youtubePlayer && youtubePlayer.pauseVideo) youtubePlayer.pauseVideo();
+        // 游戏结束时不强制停止音乐，保持氛围，或者可以根据需要 setVolume(20)
     }
 
     function update() {
@@ -361,6 +380,7 @@
 </script>
 
 </body>
+</html>
 </html>
 </body>
 </html>
