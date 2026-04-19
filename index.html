@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>猫の大冒険 - Gemini AI 日本語版</title>
+    <title>猫の大冒険 - 日本語版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body {
@@ -41,7 +41,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0,0,0,0.85);
+            background: rgba(0,0,0,0.75);
             display: flex;
             flex-direction: column;
             justify-content: center;
@@ -62,81 +62,73 @@
             transition: all 0.2s;
         }
         .btn:hover { transform: scale(1.05); }
-        .ai-badge {
-            background: linear-gradient(45deg, #6366f1, #a855f7);
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 0.75rem;
-            margin-bottom: 8px;
-            display: inline-block;
-        }
-        #ai-box {
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
-            border-radius: 20px;
-            padding: 20px;
-            margin-top: 20px;
-            max-width: 80%;
-            text-align: center;
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            display: none;
-        }
-        .loading-dots:after {
-            content: '.';
-            animation: dots 1.5s steps(5, end) infinite;
-        }
-        @keyframes dots {
-            0%, 20% { content: '.'; }
-            40% { content: '..'; }
-            60% { content: '...'; }
-            80%, 100% { content: ''; }
+        /* BGM プレイヤーを隠す */
+        #bgm-container {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            opacity: 0;
+            pointer-events: none;
         }
     </style>
 </head>
 <body>
 
 <div id="game-container">
+    <!-- YouTube BGM プレイヤー (API経由で制御) -->
+    <div id="bgm-container">
+        <div id="player"></div>
+    </div>
+
     <canvas id="gameCanvas"></canvas>
+    
     <div id="ui-layer">
         <div class="text-2xl font-bold">距離: <span id="distVal">0</span>m</div>
         <div class="text-xl">スコア: <span id="scoreVal">0</span></div>
         <div class="text-sm opacity-80 mt-2">スピード: <span id="speedVal">1.0</span>x</div>
-        <div class="text-xs opacity-60 mt-1">難易度: <span id="densityVal">1</span></div>
+        <div class="text-xs opacity-60 mt-1">レベル: <span id="densityVal">1</span></div>
     </div>
+
     <div id="overlay">
         <h1 id="statusTitle" class="text-5xl font-bold mb-4 text-yellow-400">森の大冒険</h1>
-        <p id="statusDesc" class="text-xl px-10 text-center max-w-md">注意！警告アイコンが出たら巨石が飛んでくるぞ！</p>
-        
-        <!-- ✨ Gemini AI 评价区域 -->
-        <div id="ai-box">
-            <span class="ai-badge">✨ 猫の知恵袋 (Gemini AI)</span>
-            <p id="ai-comment" class="italic text-lg"></p>
-            <p id="ai-title" class="text-sm text-blue-300 mt-2 font-bold"></p>
-        </div>
-
-        <button id="actionBtn" class="btn" onclick="startGame()">冒険を始める</button>
+        <p id="statusDesc" class="text-xl px-10 text-center max-w-md">マウスやタッチで猫を動かして、障害物を避けよう！<br><br>※開始すると音楽が流れます</p>
+        <button class="btn" onclick="startGame()">冒険を始める</button>
     </div>
 </div>
 
+<!-- YouTube IFrame API -->
+<script src="https://www.youtube.com/iframe_api"></script>
+
 <script>
-    // --- Gemini API 設定 ---
-    const apiKey = ""; 
-    const modelName = "gemini-2.5-flash-preview-09-2025";
-    const ttsModelName = "gemini-2.5-flash-preview-tts";
+    // --- BGM 制御 ---
+    let youtubePlayer;
+    function onYouTubeIframeAPIReady() {
+        youtubePlayer = new YT.Player('player', {
+            height: '1',
+            width: '1',
+            videoId: 'PM5V3P_iDAk',
+            playerVars: {
+                'autoplay': 0,
+                'loop': 1,
+                'playlist': 'PM5V3P_iDAk' // ループに必要
+            },
+            events: {
+                'onReady': (event) => {
+                    event.target.setVolume(50);
+                }
+            }
+        });
+    }
 
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
     const scoreVal = document.getElementById('scoreVal');
     const distVal = document.getElementById('distVal');
     const speedVal = document.getElementById('speedVal');
-    const densityVal = document.getElementById('densityVal');
     const overlay = document.getElementById('overlay');
     const statusTitle = document.getElementById('statusTitle');
     const statusDesc = document.getElementById('statusDesc');
-    const aiBox = document.getElementById('ai-box');
-    const aiComment = document.getElementById('ai-comment');
-    const aiTitle = document.getElementById('ai-title');
-    const actionBtn = document.getElementById('actionBtn');
 
     const ASSETS = {
         bg: 'https://raw.githubusercontent.com/R-ZB/2026.4.19workshop/main/bg_ground.png',
@@ -161,112 +153,8 @@
         mouseX: 0,
         mouseY: 0,
         spawnChance: 0.012,
-        maxSpawnChance: 0.08, 
         lastBigStoneTime: 0
     };
-
-    // --- AI ロジック ---
-
-    async function processGameResults(dist, score) {
-        aiBox.style.display = 'block';
-        aiComment.innerHTML = "猫が考え中<span class='loading-dots'></span>";
-        aiTitle.innerText = "";
-
-        const systemPrompt = "あなたは冒険好きな猫のメンターです。プレイヤーの走行距離(m)とスコア(score)に基づいて、短くてユーモアのある日本語の評価コメントを生成してください。語尾に「〜にゃ」を付けてください。また、プレイヤーにふさわしい面白い二つ名（称号）も考えてください。";
-        const userQuery = `結果：距離 ${dist}m、スコア ${score}点。評価と二つ名を日本語でお願いします。JSON形式で返してください: {"comment": "コメント内容", "title": "二つ名"}`;
-
-        try {
-            const response = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    contents: [{ parts: [{ text: userQuery }] }],
-                    systemInstruction: { parts: [{ text: systemPrompt }] },
-                    generationConfig: { responseMimeType: "application/json" }
-                })
-            });
-
-            const result = await response.json();
-            const aiData = JSON.parse(result.candidates[0].content.parts[0].text);
-            
-            aiComment.innerText = aiData.comment;
-            aiTitle.innerText = `称号：【 ${aiData.title} 】`;
-
-            // ✨ 音声合成の呼び出し
-            await speakText(aiData.comment);
-
-        } catch (error) {
-            aiComment.innerText = "お疲れ様にゃ！次はもっと遠くまで行けるはずだにゃ。";
-        }
-    }
-
-    async function speakText(text) {
-        try {
-            const response = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${ttsModelName}:generateContent?key=${apiKey}`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    contents: [{ parts: [{ text: `Say in a cute, energetic cat-like voice in Japanese: ${text}` }] }],
-                    generationConfig: {
-                        responseModalities: ["AUDIO"],
-                        speechConfig: {
-                            voiceConfig: { prebuiltVoiceConfig: { voiceName: "Aoede" } }
-                        }
-                    }
-                })
-            });
-
-            const result = await response.json();
-            const pcmBase64 = result.candidates[0].content.parts[0].inlineData.data;
-            playPCM(pcmBase64);
-        } catch (e) {
-            console.error("TTS Failed", e);
-        }
-    }
-
-    async function fetchWithRetry(url, options, retries = 5) {
-        for (let i = 0; i < retries; i++) {
-            try {
-                const res = await fetch(url, options);
-                if (res.ok) return res;
-            } catch (e) {}
-            await new Promise(r => setTimeout(r, Math.pow(2, i) * 1000));
-        }
-        throw new Error("API Limit");
-    }
-
-    function playPCM(base64) {
-        const binary = atob(base64);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        const wavData = createWavHeader(bytes.buffer, 24000);
-        const blob = new Blob([wavData], { type: 'audio/wav' });
-        const audio = new Audio(URL.createObjectURL(blob));
-        audio.play();
-    }
-
-    function createWavHeader(buffer, sampleRate) {
-        const byteLen = buffer.byteLength;
-        const header = new ArrayBuffer(44);
-        const view = new DataView(header);
-        view.setUint32(0, 0x52494646, false); 
-        view.setUint32(4, 36 + byteLen, true);
-        view.setUint32(8, 0x57415645, false); 
-        view.setUint32(12, 0x666d7420, false); 
-        view.setUint16(22, 1, true); 
-        view.setUint32(24, sampleRate, true);
-        view.setUint32(28, sampleRate * 2, true);
-        view.setUint16(32, 2, true);
-        view.setUint16(34, 16, true);
-        view.setUint32(36, 0x64617461, false); 
-        view.setUint32(40, byteLen, true);
-        const wav = new Uint8Array(44 + byteLen);
-        wav.set(new Uint8Array(header), 0);
-        wav.set(new Uint8Array(buffer), 44);
-        return wav;
-    }
-
-    // --- ゲームコアロジック ---
 
     function loadImages() {
         let loaded = 0;
@@ -274,7 +162,10 @@
         keys.forEach(key => {
             const img = new Image();
             img.src = ASSETS[key];
-            img.onload = () => { if (++loaded === keys.length) console.log('Ready'); };
+            img.onload = () => {
+                loaded++;
+                if (loaded === keys.length) console.log('Assets Ready');
+            };
             images[key] = img;
         });
     }
@@ -287,59 +178,98 @@
         }
         draw() { ctx.drawImage(this.img, this.x, this.y, this.w, this.h); }
         drawRotating() {
-            ctx.save(); ctx.translate(this.x + this.w / 2, this.y + this.h / 2);
-            ctx.rotate(this.angle); ctx.drawImage(this.img, -this.w / 2, -this.h / 2, this.w, this.h);
+            ctx.save();
+            ctx.translate(this.x + this.w / 2, this.y + this.h / 2);
+            ctx.rotate(this.angle);
+            ctx.drawImage(this.img, -this.w / 2, -this.h / 2, this.w, this.h);
             ctx.restore();
         }
-        getRect(p = 0.2) { return { x: this.x+this.w*p, y: this.y+this.h*p, w: this.w*(1-p*2), h: this.h*(1-p*2) }; }
+        getRect(p = 0.2) {
+            return {
+                x: this.x + this.w * p,
+                y: this.y + this.h * p,
+                w: this.w * (1 - p * 2),
+                h: this.h * (1 - p * 2)
+            };
+        }
     }
 
     function initGame() {
-        canvas.width = window.innerWidth; canvas.height = window.innerHeight;
-        state.mouseX = canvas.width * 0.3; state.mouseY = canvas.height / 2;
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        state.mouseX = canvas.width * 0.3;
+        state.mouseY = canvas.height / 2;
+        
         player = new Entity(state.mouseX, state.mouseY, 60, 60, images.player);
         cat = new Entity(state.mouseX - 150, state.mouseY, 80, 80, images.cat);
+        
         obstacles = []; coins = []; bigStones = []; warnings = [];
-        state.score = 0; state.distance = 0; state.worldSpeed = state.baseSpeed;
-        state.speedMultiplier = 1.0; state.bgScrollX = 0; state.spawnChance = 0.012;
-        scoreVal.innerText = '0'; distVal.innerText = '0'; aiBox.style.display = 'none';
+        state.score = 0; state.distance = 0;
+        state.worldSpeed = state.baseSpeed;
+        state.speedMultiplier = 1.0;
+        state.bgScrollX = 0;
+        state.lastBigStoneTime = Date.now();
+        
+        scoreVal.innerText = '0';
+        distVal.innerText = '0';
         for(let i=0; i<6; i++) spawnObject(true);
     }
 
     function spawnObject(randomX = false) {
         const isObstacle = Math.random() > 0.4;
-        const scale = 0.6 + Math.random() * 1.4; 
+        const scale = 0.6 + Math.random() * 1.4;
         const w = 70 * scale, h = 90 * scale;
         const startX = randomX ? Math.random() * canvas.width : canvas.width + 150;
         const startY = Math.random() * (canvas.height - h);
+        
         if (isObstacle) obstacles.push(new Entity(startX, startY, w, h, images.obstacle));
         else coins.push(new Entity(startX, startY, 45, 45, images.coin));
     }
 
     function spawnBigStone() {
-        const scale = 2.0 + Math.random() * 2.0; 
+        const scale = 2.0 + Math.random() * 2.0;
         const w = 100 * scale, h = 100 * scale;
         let startX, startY, speedX, speedY;
         const dir = Math.floor(Math.random() * 3);
         const baseSpeed = state.worldSpeed * 1.8;
-        if (dir === 0) { startX = canvas.width + 300; startY = Math.random() * (canvas.height - h); speedX = -baseSpeed; speedY = 0; }
-        else if (dir === 1) { startX = (canvas.width * 0.5) + Math.random() * (canvas.width * 0.5 - w); startY = -h - 100; speedX = -state.worldSpeed; speedY = baseSpeed; }
-        else { startX = (canvas.width * 0.5) + Math.random() * (canvas.width * 0.5 - w); startY = canvas.height + 100; speedX = -state.worldSpeed; speedY = -baseSpeed; }
+
+        if (dir === 0) { // 右から
+            startX = canvas.width + 300; startY = Math.random() * (canvas.height - h);
+            speedX = -baseSpeed; speedY = 0;
+        } else if (dir === 1) { // 上から
+            startX = (canvas.width * 0.5) + Math.random() * (canvas.width * 0.5 - w);
+            startY = -h - 100; speedX = -state.worldSpeed; speedY = baseSpeed;
+        } else { // 下から
+            startX = (canvas.width * 0.5) + Math.random() * (canvas.width * 0.5 - w);
+            startY = canvas.height + 100; speedX = -state.worldSpeed; speedY = -baseSpeed;
+        }
+
         let warnX = Math.min(canvas.width - 80, Math.max(80, startX));
         let warnY = Math.min(canvas.height - 80, Math.max(80, startY));
-        if (dir === 0) warnX = canvas.width - 100; else if (dir === 1) warnY = 50; else warnY = canvas.height - 100;
+        if (dir === 0) warnX = canvas.width - 100;
+        if (dir === 1) warnY = 50;
+        if (dir === 2) warnY = canvas.height - 100;
+
         warnings.push({ x: warnX, y: warnY, timer: 60, config: { startX, startY, w, h, speedX, speedY } });
         state.lastBigStoneTime = Date.now();
     }
 
-    function startGame() { overlay.style.display = 'none'; initGame(); state.running = true; requestAnimationFrame(gameLoop); }
+    function startGame() {
+        overlay.style.display = 'none';
+        initGame();
+        state.running = true;
+        // BGM 再生
+        if (youtubePlayer && youtubePlayer.playVideo) youtubePlayer.playVideo();
+        requestAnimationFrame(gameLoop);
+    }
 
     function gameOver() {
-        state.running = false; overlay.style.display = 'flex';
+        state.running = false;
+        overlay.style.display = 'flex';
         statusTitle.innerText = 'ゲーム終了！';
-        statusDesc.innerText = `${Math.floor(state.distance)}m 走り抜けたにゃ！`;
-        actionBtn.innerText = "もう一度遊ぶ ✨";
-        processGameResults(Math.floor(state.distance), state.score);
+        statusDesc.innerText = `走行距離: ${Math.floor(state.distance)}m\nスコア: ${state.score}\nもう一度挑戦しよう！`;
+        // BGM 停止
+        if (youtubePlayer && youtubePlayer.pauseVideo) youtubePlayer.pauseVideo();
     }
 
     function update() {
@@ -347,16 +277,20 @@
         state.distance += state.worldSpeed * 0.05;
         state.speedMultiplier = 1.0 + (state.distance / 350);
         state.worldSpeed = state.baseSpeed * state.speedMultiplier;
+        
         distVal.innerText = Math.floor(state.distance);
         speedVal.innerText = state.speedMultiplier.toFixed(1);
+
         state.bgScrollX -= state.worldSpeed;
         if (state.bgScrollX <= -canvas.width) state.bgScrollX = 0;
+
         player.x += (state.mouseX - player.w / 2 - player.x) * 0.15;
         player.y += (state.mouseY - player.h / 2 - player.y) * 0.15;
         cat.x += ((player.x - 150) - cat.x) * 0.1;
         cat.y += (player.y - cat.y) * 0.1;
 
         if (now - state.lastBigStoneTime >= (8000 / state.speedMultiplier)) spawnBigStone();
+
         for (let i = warnings.length - 1; i >= 0; i--) {
             if (--warnings[i].timer <= 0) {
                 const c = warnings[i].config;
@@ -364,29 +298,36 @@
                 warnings.splice(i, 1);
             }
         }
+
         if (Math.random() < state.spawnChance) spawnObject();
 
         const catRect = cat.getRect(0.25);
         for (let i = bigStones.length - 1; i >= 0; i--) {
-            const s = bigStones[i]; s.x += s.speedX; s.y += s.speedY; s.angle -= 0.1;
+            const s = bigStones[i];
+            s.x += s.speedX; s.y += s.speedY; s.angle -= 0.1;
             if (checkCollision(catRect, s.getRect(0.18))) { gameOver(); return; }
             if (s.x < -1000 || s.x > canvas.width + 1000) bigStones.splice(i, 1);
         }
+
         for (let i = obstacles.length - 1; i >= 0; i--) {
             obstacles[i].x -= state.worldSpeed;
             if (checkCollision(catRect, obstacles[i].getRect(0.25))) { gameOver(); return; }
             if (obstacles[i].x < -400) obstacles.splice(i, 1);
         }
+
         for (let i = coins.length - 1; i >= 0; i--) {
             coins[i].x -= state.worldSpeed;
             if (checkCollision(catRect, coins[i].getRect(0.1))) {
-                state.score += 10; scoreVal.innerText = state.score; coins.splice(i, 1); continue;
+                state.score += 10; scoreVal.innerText = state.score;
+                coins.splice(i, 1); continue;
             }
             if (coins[i].x < -200) coins.splice(i, 1);
         }
     }
 
-    function checkCollision(r1, r2) { return r1.x < r2.x + r2.w && r1.x + r1.w > r2.x && r1.y < r2.y + r2.h && r1.y + r1.h > r2.y; }
+    function checkCollision(r1, r2) {
+        return r1.x < r2.x + r2.w && r1.x + r1.w > r2.x && r1.y < r2.y + r2.h && r1.y + r1.h > r2.y;
+    }
 
     function draw() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -407,7 +348,11 @@
         cat.draw(); player.draw();
     }
 
-    function gameLoop() { if (!state.running) return; update(); draw(); requestAnimationFrame(gameLoop); }
+    function gameLoop() {
+        if (!state.running) return;
+        update(); draw();
+        requestAnimationFrame(gameLoop);
+    }
 
     window.addEventListener('mousemove', (e) => { state.mouseX = e.clientX; state.mouseY = e.clientY; });
     window.addEventListener('touchmove', (e) => { e.preventDefault(); state.mouseX = e.touches[0].clientX; state.mouseY = e.touches[0].clientY; }, { passive: false });
@@ -415,5 +360,7 @@
     window.addEventListener('resize', () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; });
 </script>
 
+</body>
+</html>
 </body>
 </html>
